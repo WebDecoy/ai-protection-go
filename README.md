@@ -144,3 +144,49 @@ not ported: it is not needed for admission or the reporting contract. This modul
 also takes explicit request metadata instead of guessing proxy trust or route
 normalization. Backend account/config, detection and report endpoints must be
 deployed before a real staging pilot. No lowering.tax code is changed by this repo.
+
+## Shared account quotas (opt-in)
+
+Set `Config[T].AccountQuota` after authentication and application authorization:
+
+```go
+AccountQuota: &protection.AccountQuota[AuthenticatedUser]{
+    RuleID: "chat_v1", SubjectSecret: secretSharedAcrossReplicas,
+    Limit: 20, WindowSeconds: 60,
+    Mode: protection.Enforce, FailureMode: protection.Open,
+    Subject: func(user AuthenticatedUser) protection.QuotaSubject {
+        return protection.QuotaSubject{AccountID: user.DatabaseID}
+    },
+},
+```
+
+The callback receives only caller-provided trusted server context. Never source its
+account/session identity or policy from browser claims. Optional `SessionLimit`
+and `SessionID` add an account-bound session cap; rotating sessions does not reset
+the account counter. IPs/shared NAT do not determine quota identity.
+
+Requires quota backend migration 78 and `/api/v1/sdk/ai-abuse/quota`. The quota
+mode defaults to `Observe`, failure policy to `Open`, and timeout to one second;
+these are independent of cloud detection and dashboard mode. Explicit
+`FailureMode: Closed` returns 503 for unavailable/invalid quota state. Enforced
+exhaustion returns 429 and `Retry-After`; explicit `Check` callers can use
+`RetryAfterSeconds()` and must enforce the decision themselves.
+
+Observation consumes the same counter as enforcement. Each allowed admission
+consumes a unit, including retried or later-cancelled requests; there are no
+automatic retries/refunds/reusable idempotency permits. Fixed UTC epoch windows
+permit up to twice the limit across a boundary. This is not concurrency admission
+or model-dollar accounting, and a timeout may happen after a committed increment.
+
+The SDK sends property/feature-scoped HMAC-SHA256 pseudonyms, not raw account IDs,
+local rule context or prompts. Use a random secret of at least 32 UTF-8 bytes,
+identical on every Go/JS replica. Rotation resets quotas; coordinate after the
+longest window. Pseudonyms remain correlatable and are not anonymous. Expired
+buckets are removed on access and by an hourly sweep; healthy retention is at
+most the 24-hour maximum window plus a sweep, extended if cleanup fails/backlogs.
+
+Policy settings are immutable for a rule ID: inconsistent replicas get an
+unavailable check instead of resetting a bucket. Versioning a rule starts new
+counters deliberately. Backend limits are 32 policies and 10,000 active
+account/session buckets per property. Capacity/state errors follow the quota's
+failure policy; detector fail-open remains independent.

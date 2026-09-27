@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,7 @@ type Config[T any] struct {
 	DetectorFailureMode               FailureMode   // Defaults to Open.
 	DetectorTimeout, ReportingTimeout time.Duration // Each defaults to one second.
 	MaxPendingReports                 int           // Defaults to 100.
+	AccountQuota                      *AccountQuota[T]
 	Rules                             []Rule[T]
 	HTTPClient                        *http.Client
 	DisableCentralReporting           bool
@@ -73,18 +75,20 @@ type Check struct {
 // Decision is immutable through the public API. Report accepts only decisions
 // created by the same client and emits each decision at most once.
 type Decision struct {
-	report Report
-	status int
-	owner  any
-	once   sync.Once
+	report     Report
+	status     int
+	retryAfter int
+	owner      any
+	once       sync.Once
 }
 
-func (d *Decision) Allowed() bool   { return d.report.Decision == "allow" }
-func (d *Decision) Reason() string  { return d.report.Reason }
-func (d *Decision) Status() int     { return d.status }
-func (d *Decision) ID() string      { return d.report.RequestID }
-func (d *Decision) Degraded() bool  { return d.report.Degraded }
-func (d *Decision) Checks() []Check { return append([]Check(nil), d.report.Checks...) }
+func (d *Decision) RetryAfterSeconds() int { return d.retryAfter }
+func (d *Decision) Allowed() bool          { return d.report.Decision == "allow" }
+func (d *Decision) Reason() string         { return d.report.Reason }
+func (d *Decision) Status() int            { return d.status }
+func (d *Decision) ID() string             { return d.report.RequestID }
+func (d *Decision) Degraded() bool         { return d.report.Degraded }
+func (d *Decision) Checks() []Check        { return append([]Check(nil), d.report.Checks...) }
 
 type Client[T any] struct {
 	config   Config[T]
@@ -140,7 +144,12 @@ func New[T any](cfg Config[T]) (*Client[T], error) {
 		return nil, errors.New("invalid protection configuration")
 	}
 	cfg.Rules = append([]Rule[T](nil), cfg.Rules...)
-	ids := map[string]bool{"webdecoy": true}
+	var quotaErr error
+	cfg.AccountQuota, quotaErr = prepareQuota(cfg.AccountQuota)
+	if quotaErr != nil {
+		return nil, quotaErr
+	}
+	ids := map[string]bool{"webdecoy": true, "account_quota": true}
 	for i := range cfg.Rules {
 		r := &cfg.Rules[i]
 		if r.Mode == "" {
@@ -241,6 +250,11 @@ func (c *Client[T]) Check(ctx context.Context, req Request, trusted T) (*Decisio
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	c.checkQuota(ctx, trusted, d)
+	if err := ctx.Err(); err != nil {
+		c.Report(d, Outcome{Cancelled: true})
+		return nil, err
+	}
 	remote := Check{ID: "webdecoy", Source: "remote", Mode: c.config.Mode, Decision: "skipped", Reason: "local_denial"}
 	if !d.Allowed() {
 		d.report.Checks = append(d.report.Checks, remote)
@@ -319,6 +333,9 @@ func (c *Client[T]) Protect(w http.ResponseWriter, r *http.Request, req Request,
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-WebDecoy-Request-ID", d.ID())
+		if d.retryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(d.retryAfter))
+		}
 		w.WriteHeader(d.Status())
 		fmt.Fprintf(w, `{"error":%q,"request_id":%q}`, d.Reason(), d.ID())
 		return nil
