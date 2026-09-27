@@ -190,3 +190,29 @@ unavailable check instead of resetting a bucket. Versioning a rule starts new
 counters deliberately. Backend limits are 32 policies and 10,000 active
 account/session buckets per property. Capacity/state errors follow the quota's
 failure policy; detector fail-open remains independent.
+
+
+## Distributed concurrency (unpublished, #1373)
+
+Optional concurrency policy shares per-account and property/feature capacity
+across app replicas. Defaults are observe/open; detector failure policy is
+independent. Authenticate first and derive the account ID from trusted server
+state. Keep rule IDs and subject secrets identical across replicas.
+
+Configure `Config.Concurrency` with `RuleID`, `SubjectSecret`, `AccountLimit`,
+`FeatureLimit`, and a `Subject` function returning `QuotaSubject{AccountID: ...}`.
+`Protect` owns the lease for the handler lifetime, preserves the writer/body,
+and adds cancellation to the request context. Await all provider work before
+returning. For explicit error/completion ownership, use `RunConcurrent` after
+normal admission; `Check` does not acquire a lease. Never automatically retry
+provider work because RunConcurrent returned an error: work may have occurred.
+
+Heartbeat TTL defaults to 30 seconds and maximum runtime to 300 seconds.
+Confirmed completion releases immediately. Errors, cancellation, crashes and
+lease loss retain capacity until maximum runtime, because cancellation is not
+proof a remote provider stopped. Upstream work must honor cancellation and have
+a real runtime bound. Fail-open outages cannot guarantee a concurrency cap.
+Released replay tombstones remain 24 hours: the pilot cap is 10,000 granted
+acquisitions/day/property and 32 policies/property. This is not a throughput SLA.
+The private app repository's `integrations/ai-abuse/CONCURRENCY.md` documents the
+wire contract, failure behavior, deployment order and validation evidence.

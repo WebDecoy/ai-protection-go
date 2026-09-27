@@ -50,6 +50,7 @@ type Config[T any] struct {
 	DetectorTimeout, ReportingTimeout time.Duration // Each defaults to one second.
 	MaxPendingReports                 int           // Defaults to 100.
 	AccountQuota                      *AccountQuota[T]
+	Concurrency                       *Concurrency[T]
 	Rules                             []Rule[T]
 	HTTPClient                        *http.Client
 	DisableCentralReporting           bool
@@ -149,7 +150,11 @@ func New[T any](cfg Config[T]) (*Client[T], error) {
 	if quotaErr != nil {
 		return nil, quotaErr
 	}
-	ids := map[string]bool{"webdecoy": true, "account_quota": true}
+	cfg.Concurrency, quotaErr = prepareConcurrency(cfg.Concurrency)
+	if quotaErr != nil {
+		return nil, quotaErr
+	}
+	ids := map[string]bool{"webdecoy": true, "account_quota": true, "concurrency": true}
 	for i := range cfg.Rules {
 		r := &cfg.Rules[i]
 		if r.Mode == "" {
@@ -339,6 +344,52 @@ func (c *Client[T]) Protect(w http.ResponseWriter, r *http.Request, req Request,
 		w.WriteHeader(d.Status())
 		fmt.Fprintf(w, `{"error":%q,"request_id":%q}`, d.Reason(), d.ID())
 		return nil
+	}
+	if c.config.Concurrency != nil {
+		previousDegraded := d.report.Degraded
+		checkIndex := len(d.report.Checks)
+		d.report.Checks = append(d.report.Checks, Check{ID: "concurrency", Source: "shared", Mode: c.config.Concurrency.Mode, Decision: "unavailable", Reason: "concurrency_incomplete"})
+		d.report.Degraded = true
+		result, e := c.RunConcurrent(r.Context(), trusted, func(ctx context.Context) error {
+			outcome.HandlerAttempted = true
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return ctx.Err()
+		})
+		d.report.Checks[checkIndex] = result.Check
+		d.report.Degraded = previousDegraded
+		if result.Check.Decision == "unavailable" {
+			d.report.Degraded = true
+		}
+		if e != nil && !outcome.HandlerAttempted && r.Context().Err() == nil {
+			result.Allowed = false
+			result.Status = 503
+			result.Check.Reason = "concurrency_unavailable"
+			d.report.Degraded = true
+		}
+		if !result.Allowed && !outcome.HandlerAttempted && r.Context().Err() == nil {
+			d.report.Decision = "deny"
+			d.report.Reason = result.Check.Reason
+			d.report.Action = "denied"
+			if result.Status == 503 {
+				d.report.Action = "denied_unavailable"
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Content-Type", "application/json")
+			if result.RetryAfterSeconds > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(result.RetryAfterSeconds))
+			}
+			w.WriteHeader(result.Status)
+			fmt.Fprintf(w, `{"error":%q}`, result.Check.Reason)
+		}
+		if e != nil {
+			outcome.HandlerError = true
+		}
+		// Preserve Protect's pre-invocation error contract: a legacy adapter may
+		// retry next on returned errors. Never return a retryable error after work.
+		if outcome.HandlerAttempted || r.Context().Err() == nil {
+			return nil
+		}
+		return e
 	}
 	outcome.HandlerAttempted = true
 	next.ServeHTTP(w, r)
