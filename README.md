@@ -104,7 +104,8 @@ decisions cannot inject duplicate report events into another client.
 
 Detection sends the normalized route, method, client IP, user agent, header names,
 accept-language and accept-encoding. It excludes query strings, prompts, request
-bodies, cookie/authentication values and application context. Choose non-sensitive
+bodies, session cookie/authentication values and application context.
+Opting into browser evidence forwards only the WebDecoy receipt cookie. Choose non-sensitive
 rule IDs/reason codes: they are visible in reports and possibly denial responses.
 
 Central reporting uses the same bounded schema as the JavaScript SDK: check
@@ -248,3 +249,18 @@ other provider clients need a reviewed application adapter. The SDK never parses
 or stores prompts/outputs to meter usage. This does not change WebDecoy plans or
 create a subscription meter. The private app's `integrations/ai-abuse/BUDGETS.md`
 contains examples, supported workloads, privacy, capacity and release gates.
+
+## Optional browser evidence
+
+Add `data-runtime-evidence="true"` to the existing WebDecoy scanner tag and set
+`BrowserEvidenceOrigin` to the exact HTTPS site origin (no trailing slash).
+Requires the compatible ingest/CDN deployment and a same-origin AI endpoint.
+The SDK forwards only the property-specific WebDecoy receipt, never the other
+cookies. The signed observation expires after 60 seconds and is bound to the
+property, origin, IP and user agent. Missing or invalid evidence fails open and
+adds an unavailable `browser_evidence` check; a clean receipt never overrides
+another denial. This is optional risk evidence, not proof of a human or identity.
+Start in observe mode; real-world accuracy has not been established.
+
+`Protect` selects the receipt from the incoming HTTP request automatically.
+With `Check`, pass request Headers or the explicit Request.BrowserEvidence value.

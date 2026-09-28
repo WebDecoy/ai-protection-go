@@ -44,6 +44,7 @@ type Rule[T any] struct {
 	Evaluate    func(T) (RuleResult, error) // Cheap, synchronous; must not perform network I/O.
 }
 type Config[T any] struct {
+	BrowserEvidenceOrigin             string // Exact first-party HTTPS origin; opt-in browser evidence.
 	BaseURL, APIKey, PropertyID       string
 	Mode                              Mode          // Cloud mode; defaults to Enforce. Start a pilot with Observe.
 	DetectorFailureMode               FailureMode   // Defaults to Open.
@@ -61,9 +62,10 @@ type Config[T any] struct {
 // Request contains explicit metadata, never a body. IP must come from trusted
 // ingress. Route must be a normalized route such as /protests/{id}/interview/start.
 type Request struct {
-	IP            netip.Addr
-	Method, Route string
-	Headers       http.Header
+	BrowserEvidence string // Optional explicit receipt for Check callers; never a trust boolean.
+	IP              netip.Addr
+	Method, Route   string
+	Headers         http.Header
 }
 type Check struct {
 	ID         string  `json:"id"`
@@ -126,6 +128,12 @@ func New[T any](cfg Config[T]) (*Client[T], error) {
 	if !validUUID(cfg.PropertyID) || strings.TrimSpace(cfg.APIKey) == "" || strings.ContainsAny(cfg.APIKey, "\r\n") {
 		return nil, errors.New("valid property ID and server API key required")
 	}
+	if cfg.BrowserEvidenceOrigin != "" {
+		origin, e := url.Parse(cfg.BrowserEvidenceOrigin)
+		if e != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || origin.ForceQuery {
+			return nil, errors.New("browser evidence origin must be an exact HTTPS origin")
+		}
+	}
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 	if cfg.Mode == "" {
 		cfg.Mode = Enforce
@@ -159,7 +167,7 @@ func New[T any](cfg Config[T]) (*Client[T], error) {
 	if quotaErr != nil {
 		return nil, quotaErr
 	}
-	ids := map[string]bool{"webdecoy": true, "account_quota": true, "concurrency": true}
+	ids := map[string]bool{"webdecoy": true, "account_quota": true, "concurrency": true, "browser_evidence": true}
 	for i := range cfg.Rules {
 		r := &cfg.Rules[i]
 		if r.Mode == "" {
@@ -285,7 +293,14 @@ func (c *Client[T]) Check(ctx context.Context, req Request, trusted T) (*Decisio
 	remote.Decision = "unavailable"
 	remote.Reason = binding.status
 	if binding.status == "verified" {
-		decision, err := c.detect(ctx, req, id, remote.Mode)
+		decision, browserStatus, err := c.detect(ctx, req, id, remote.Mode)
+		if c.config.BrowserEvidenceOrigin != "" {
+			check := browserEvidenceCheck(browserStatus, remote.Mode)
+			d.report.Checks = append(d.report.Checks, check)
+			if check.Decision == "unavailable" {
+				d.report.Degraded = true
+			}
+		}
 		if err != nil {
 			remote.Reason = "detector_unavailable"
 			if remote.Mode == Enforce && c.config.DetectorFailureMode == Closed {
@@ -322,6 +337,9 @@ func (c *Client[T]) Check(ctx context.Context, req Request, trusted T) (*Decisio
 // Protect invokes next only after admission. Use inside an authenticated route,
 // before writing SSE headers. The original writer and request reach next unchanged.
 func (c *Client[T]) Protect(w http.ResponseWriter, r *http.Request, req Request, trusted T, next http.Handler) error {
+	if c.config.BrowserEvidenceOrigin != "" && req.BrowserEvidence == "" {
+		req.BrowserEvidence = browserReceipt(r.Header, c.config.PropertyID)
+	}
 	d, err := c.Check(r.Context(), req, trusted)
 	if err != nil {
 		return err

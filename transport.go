@@ -98,7 +98,7 @@ func (c *Client[T]) json(ctx context.Context, method, path string, payload any, 
 	}
 	return json.Unmarshal(raw, out)
 }
-func (c *Client[T]) detect(ctx context.Context, r Request, id string, mode Mode) (string, error) {
+func (c *Client[T]) detect(ctx context.Context, r Request, id string, mode Mode) (string, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.config.DetectorTimeout)
 	defer cancel()
 	names := []string{}
@@ -109,15 +109,26 @@ func (c *Client[T]) detect(ctx context.Context, r Request, id string, mode Mode)
 	payload := map[string]any{"decision_mode": "unified_v1", "ai_admission": map[string]any{"request_id": id, "mode": mode},
 		"request_metadata": map[string]any{"method": r.Method, "path": r.Route, "ip": r.IP.Unmap().String(), "user_agent": r.Headers.Get("User-Agent"), "timestamp": c.now().UnixMilli()},
 		"cs":               map[string]any{"hn": names, "al": r.Headers.Get("Accept-Language"), "ae": r.Headers.Get("Accept-Encoding")}, "local_analysis": map[string]any{"needs_verification": true}}
+	if c.config.BrowserEvidenceOrigin != "" {
+		token := r.BrowserEvidence
+		if token == "" {
+			token = browserReceipt(r.Headers, c.config.PropertyID)
+		}
+		if len(token) > 4096 || !receiptPattern.MatchString(token) {
+			token = ""
+		}
+		payload["browser_evidence"] = map[string]string{"origin": c.config.BrowserEvidenceOrigin, "token": token}
+	}
 	var result struct {
-		Decision string `json:"decision"`
-		Mode     string `json:"decision_mode"`
+		BrowserEvidence string `json:"browser_evidence"`
+		Decision        string `json:"decision"`
+		Mode            string `json:"decision_mode"`
 	}
 	if err := c.json(ctx, http.MethodPost, "/api/v1/sdk/detect", payload, &result); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if result.Mode != "unified_v1" || (result.Decision != "allow" && result.Decision != "block" && result.Decision != "challenge") {
-		return "", errors.New("unsupported detection response")
+		return "", "", errors.New("unsupported detection response")
 	}
-	return result.Decision, nil
+	return result.Decision, result.BrowserEvidence, nil
 }
