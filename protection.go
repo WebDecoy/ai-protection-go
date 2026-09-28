@@ -51,6 +51,7 @@ type Config[T any] struct {
 	MaxPendingReports                 int           // Defaults to 100.
 	AccountQuota                      *AccountQuota[T]
 	Concurrency                       *Concurrency[T]
+	Budget                            *Budget[T]
 	Rules                             []Rule[T]
 	HTTPClient                        *http.Client
 	DisableCentralReporting           bool
@@ -151,6 +152,10 @@ func New[T any](cfg Config[T]) (*Client[T], error) {
 		return nil, quotaErr
 	}
 	cfg.Concurrency, quotaErr = prepareConcurrency(cfg.Concurrency)
+	if quotaErr != nil {
+		return nil, quotaErr
+	}
+	cfg.Budget, quotaErr = prepareBudget(cfg.Budget)
 	if quotaErr != nil {
 		return nil, quotaErr
 	}
