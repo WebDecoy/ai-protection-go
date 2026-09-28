@@ -26,6 +26,7 @@ type BudgetUsage struct {
 	InputTokens, OutputTokens int64
 }
 type BudgetCall struct {
+	RequestID                       string // Optional Decision.ID(); never infer identity from browser input.
 	PriceID                         string
 	MaxInputTokens, MaxOutputTokens int64
 }
@@ -44,6 +45,7 @@ type Budget[T any] struct {
 	Subject               func(T) BudgetSubject
 }
 type BudgetResult struct {
+	CallID                                         string
 	Allowed, Started, Reserved, WouldDeny, Overrun bool
 	Status, RetryAfterSeconds                      int
 	Reason                                         string
@@ -133,6 +135,33 @@ func (c *Client[T]) RunBudget(ctx context.Context, trusted T, call BudgetCall, w
 	if !ok || e != nil || call.MaxInputTokens+call.MaxOutputTokens < 1 {
 		return out, errors.New("known price and conservative token bounds required")
 	}
+	if call.RequestID != "" && !validUUID(call.RequestID) {
+		return out, errors.New("invalid request ID")
+	}
+	nonce, nonceErr := requestID()
+	if nonceErr != nil {
+		return out, nonceErr
+	}
+	out.CallID = nonce
+	event := UsageReport{Schema: 1, CallID: nonce, RequestID: call.RequestID, RuleID: b.RuleID, Mode: b.Mode, PriceID: call.PriceID, InputRate: price.InputMicrosPerMillion, OutputRate: price.OutputMicrosPerMillion, ReservedTokens: call.MaxInputTokens + call.MaxOutputTokens, ReservedMicros: micros}
+	defer func() {
+		event.Phase = "finish"
+		event.Timestamp = c.now().UTC()
+		event.Started = out.Started
+		event.WouldDeny = out.WouldDeny
+		event.Reason = out.Reason
+		if recovered := recover(); recovered != nil {
+			event.Reason = "provider_error"
+			c.reportUsage(event)
+			panic(recovered)
+		}
+		if ctx.Err() != nil {
+			event.Reason = "cancelled"
+		} else if err != nil {
+			event.Reason = "provider_error"
+		}
+		c.reportUsage(event)
+	}()
 	runtime := BudgetRuntime{price.Provider, price.Model, call.MaxInputTokens, call.MaxOutputTokens}
 	out.Allowed = true
 	out.Reason = "budget_unavailable"
@@ -150,10 +179,6 @@ func (c *Client[T]) RunBudget(ctx context.Context, trusted T, call BudgetCall, w
 		if id == "" || len(id) > 256 || !utf8.ValidString(id) {
 			e = errors.New("invalid budget subject")
 		}
-	}
-	nonce, nonceErr := requestID()
-	if nonceErr != nil {
-		e = nonceErr
 	}
 	body := map[string]any{"schema": 1, "operation": "reserve", "rule_id": b.RuleID, "mode": b.Mode, "nonce": nonce, "window_seconds": b.WindowSeconds, "limits": b.Limits, "tokens": call.MaxInputTokens + call.MaxOutputTokens, "micros": micros}
 	body["subject"] = quotaHash(b.SubjectSecret, "webdecoy.budget.v1", strings.ToLower(c.config.PropertyID), b.RuleID, "account", subject.AccountID)
@@ -197,6 +222,7 @@ func (c *Client[T]) RunBudget(ctx context.Context, trusted T, call BudgetCall, w
 			out.Reason = grant.Reason
 			return out, nil
 		}
+		event.ReservationID = grant.ReservationID
 		out.Reserved = true
 		out.WouldDeny = !*grant.Allowed
 		out.Reason = "budget_usage_unknown"
@@ -207,18 +233,28 @@ func (c *Client[T]) RunBudget(ctx context.Context, trusted T, call BudgetCall, w
 		return out, e
 	}
 	out.Started = true
+	event.Phase = "start"
+	event.Timestamp = c.now().UTC()
+	event.Started = true
+	event.WouldDeny = out.WouldDeny
+	event.Reason = "provider_attempt"
+	c.reportUsage(event)
 	usage, err := work(workCtx, runtime)
 	if err != nil {
 		return out, err
-	}
-	if !out.Reserved {
-		return out, nil
 	}
 	if workCtx.Err() != nil || usage == nil || usage.Provider != price.Provider || usage.Model != price.Model {
 		return out, nil
 	}
 	cost, e := BudgetCost(price, usage.InputTokens, usage.OutputTokens)
 	if e != nil {
+		return out, nil
+	}
+	input, output := usage.InputTokens, usage.OutputTokens
+	event.InputTokens = &input
+	event.OutputTokens = &output
+	event.CostMicros = &cost
+	if !out.Reserved {
 		return out, nil
 	}
 	out.Overrun = usage.InputTokens > call.MaxInputTokens || usage.OutputTokens > call.MaxOutputTokens

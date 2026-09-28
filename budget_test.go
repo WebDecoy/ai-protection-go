@@ -17,6 +17,10 @@ func TestBudgetLifecycleAndIndependentFailureMode(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			var starts, settlements atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/usage") {
+					w.WriteHeader(202)
+					return
+				}
 				var p map[string]any
 				if e := json.NewDecoder(r.Body).Decode(&p); e != nil {
 					t.Error(e)

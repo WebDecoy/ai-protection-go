@@ -264,3 +264,19 @@ Start in observe mode; real-world accuracy has not been established.
 
 `Protect` selects the receipt from the incoming HTTP request automatically.
 With `Check`, pass request Headers or the explicit Request.BrowserEvidence value.
+
+## Model-attempt reports
+
+Budget hooks now send separate start/finish events to WebDecoy automatically.
+Each attempt has a random call ID; pass the admission decision's request ID in
+`BudgetCall.RequestID` (`decision.ID()`). `BudgetResult.CallID` exposes the attempt ID.
+Drain model work then call `Client.Flush(ctx)` to flush both report types.
+
+The dashboard labels callback starts and final usage as SDK-reported and joins
+retained reservations to confirm accounting. Neither is a provider invoice.
+Missing usage is unknown, and avoided cost is unavailable—not inferred from
+request denials. Usage events contain numeric tokens, configured rates and price/
+rule codes, but no prompts, responses, model names or raw user identities. Use
+non-sensitive price/rule codes. Reporting remains bounded and best effort;
+failures do not change provider results, trigger retries or refund charges.
+Requires the compatible usage endpoint; old backends may log reporting failures.
