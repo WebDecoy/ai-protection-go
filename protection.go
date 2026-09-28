@@ -150,7 +150,7 @@ func New[T any](cfg Config[T]) (*Client[T], error) {
 	if cfg.MaxPendingReports == 0 {
 		cfg.MaxPendingReports = 100
 	}
-	if !validMode(cfg.Mode) || !validFailure(cfg.DetectorFailureMode) || cfg.DetectorTimeout < 0 || cfg.ReportingTimeout < 0 || cfg.MaxPendingReports < 1 || len(cfg.Rules) > 32 {
+	if !validMode(cfg.Mode) || !validFailure(cfg.DetectorFailureMode) || cfg.DetectorTimeout < 0 || cfg.DetectorTimeout > 10*time.Second || cfg.ReportingTimeout < 0 || cfg.ReportingTimeout > 10*time.Second || cfg.MaxPendingReports < 1 || cfg.MaxPendingReports > 10000 || len(cfg.Rules) > 32 {
 		return nil, errors.New("invalid protection configuration")
 	}
 	cfg.Rules = append([]Rule[T](nil), cfg.Rules...)
@@ -223,7 +223,7 @@ func (c *Client[T]) Check(ctx context.Context, req Request, trusted T) (*Decisio
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !strings.HasPrefix(req.Route, "/") || strings.ContainsAny(req.Route, "?#\r\n") || req.Method == "" {
+	if len(req.Route) > 512 || !strings.HasPrefix(req.Route, "/") || strings.ContainsAny(req.Route, "?#\r\n") || req.Method == "" {
 		return nil, errors.New("method and normalized route required (no query or fragment)")
 	}
 	id, err := requestID()

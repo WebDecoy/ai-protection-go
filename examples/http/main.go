@@ -72,11 +72,14 @@ func main() {
 	}()
 	<-stop
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		log.Print(err)
+		_ = server.Close() // Cancel remaining connections after the drain deadline.
 	}
-	if err := client.Flush(ctx); err != nil {
+	cancel()
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer flushCancel()
+	if err := client.Flush(flushCtx); err != nil {
 		log.Print(err)
 	}
 }

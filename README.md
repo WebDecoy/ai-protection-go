@@ -280,3 +280,26 @@ rule codes, but no prompts, responses, model names or raw user identities. Use
 non-sensitive price/rule codes. Reporting remains bounded and best effort;
 failures do not change provider results, trigger retries or refund charges.
 Requires the compatible usage endpoint; old backends may log reporting failures.
+
+## Release contract
+
+Minimum supported Go toolchain: 1.26.1; tested with that exact toolchain. The module
+has zero third-party dependencies. `scripts/check-module.py` builds an explicit
+allowlist zip and installs it into a fresh consumer and module cache using a local
+file proxy; it does not publish a module or contact a public checksum service.
+The ephemeral proxy test disables sumdb only for that locally generated fixture;
+do not copy those settings to customer builds. License/repository release approval
+is still pending. Keep the private pilot snapshot until a reviewed module exists.
+
+Config/detector JSON is capped at 64 KiB. Detector and reporting timeouts default
+to one second and are limited to ten seconds; report capacity defaults to 100 and
+is limited to 10000. Standard net/http transport honors request context; a supplied
+custom transport must do so too. A normalized Route is required (maximum 512 bytes,
+no query/fragment). The SDK never parses untrusted forwarding headers into client IP.
+
+Basic cold/warm cloud admission permits up to two/one seconds of configured waits.
+Optional quota, lease acquire and per-call reservation each default to one more
+second. Rule CPU, caller auth/IP resolution, scheduling, model work and custom
+transports are outside this bound. Do not describe it as a wall-clock SLA.
+Drain HTTP/model work on shutdown and then Flush with a deadline. Existing callback
+streaming/writer interfaces are passed through; flushing cannot recover lost reports.
