@@ -173,9 +173,10 @@ these are independent of cloud detection and dashboard mode. Explicit
 exhaustion returns 429 and `Retry-After`; explicit `Check` callers can use
 `RetryAfterSeconds()` and must enforce the decision themselves.
 
-Observation consumes the same counter as enforcement. Each allowed admission
-consumes a unit, including retried or later-cancelled requests; there are no
-automatic retries/refunds/reusable idempotency permits. Fixed UTC epoch windows
+Observation consumes the same counter as enforcement. In default schema 1, each
+allowed admission consumes a unit, including retried or later-cancelled requests;
+there are no automatic retries or refunds. Opt-in schema 2 adds bounded recovery
+of the same admission (see below). Fixed UTC epoch windows
 permit up to twice the limit across a boundary. This is not concurrency admission
 or model-dollar accounting, and a timeout may happen after a committed increment.
 
