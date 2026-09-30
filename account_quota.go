@@ -7,6 +7,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -23,6 +25,8 @@ type AccountQuota[T any] struct {
 	FailureMode                        FailureMode // Defaults to Open; choose Closed explicitly for a hard quota.
 	Timeout                            time.Duration
 	Subject                            func(T) QuotaSubject
+	Idempotency                        bool           // Opt-in schema 2. At most two attempts, each bounded by Timeout.
+	OperationID                        func(T) string // Optional trusted, persisted ID for the SAME logical admission.
 }
 
 func prepareQuota[T any](q *AccountQuota[T]) (*AccountQuota[T], error) {
@@ -40,10 +44,38 @@ func prepareQuota[T any](q *AccountQuota[T]) (*AccountQuota[T], error) {
 	if q.Timeout == 0 {
 		q.Timeout = time.Second
 	}
-	if !code.MatchString(q.RuleID) || len(q.SubjectSecret) < 32 || !utf8.ValidString(q.SubjectSecret) || q.Subject == nil || q.Limit < 1 || q.Limit > 1000000 || q.WindowSeconds < 1 || q.WindowSeconds > 86400 || q.SessionLimit < 0 || q.SessionLimit > q.Limit || !validMode(q.Mode) || !validFailure(q.FailureMode) || q.Timeout <= 0 || q.Timeout > 10*time.Second {
+	if (q.OperationID != nil && !q.Idempotency) || !code.MatchString(q.RuleID) || len(q.SubjectSecret) < 32 || !utf8.ValidString(q.SubjectSecret) || q.Subject == nil || q.Limit < 1 || q.Limit > 1000000 || q.WindowSeconds < 1 || q.WindowSeconds > 86400 || q.SessionLimit < 0 || q.SessionLimit > q.Limit || !validMode(q.Mode) || !validFailure(q.FailureMode) || q.Timeout <= 0 || q.Timeout > 10*time.Second {
 		return nil, errors.New("invalid account quota configuration")
 	}
 	return q, nil
+}
+
+var quotaOperationPattern = regexp.MustCompile(`^[1-9][0-9]{9}\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$`)
+
+// NewQuotaOperationID creates an admission recovery ID. Persist it in trusted
+// server state if recovery must survive request/process loss. Valid for ten minutes.
+func NewQuotaOperationID() (string, error) {
+	id, err := requestID()
+	if err != nil {
+		return "", err
+	}
+	return strconv.FormatInt(time.Now().Unix(), 10) + "." + id, nil
+}
+func quotaOperationID[T any](q *AccountQuota[T], trusted T) (id string, err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.New("invalid operation ID")
+		}
+	}()
+	if q.OperationID != nil {
+		id = q.OperationID(trusted)
+	} else {
+		id, err = NewQuotaOperationID()
+	}
+	if err == nil && !quotaOperationPattern.MatchString(id) {
+		err = errors.New("invalid operation ID")
+	}
+	return
 }
 
 // Each UTF-8 field is framed with its uint32 big-endian byte length. This avoids
@@ -78,12 +110,13 @@ func (c *Client[T]) checkQuota(ctx context.Context, trusted T, d *Decision) {
 	start := time.Now()
 	check := Check{ID: "account_quota", Source: "shared", Mode: q.Mode, Decision: "unavailable", Reason: "account_quota_unavailable"}
 	var result struct {
-		Schema    int    `json:"schema"`
-		Allowed   *bool  `json:"allowed"`
-		Reason    string `json:"reason"`
-		Remaining *int   `json:"remaining"`
-		Retry     *int   `json:"retry_after_seconds"`
-		Reset     int64  `json:"reset_at"`
+		Schema      int    `json:"schema"`
+		OperationID string `json:"operation_id"`
+		Allowed     *bool  `json:"allowed"`
+		Reason      string `json:"reason"`
+		Remaining   *int   `json:"remaining"`
+		Retry       *int   `json:"retry_after_seconds"`
+		Reset       int64  `json:"reset_at"`
 	}
 	s, err := quotaSubject(q, trusted)
 	if err == nil {
@@ -92,18 +125,53 @@ func (c *Client[T]) checkQuota(ctx context.Context, trusted T, d *Decision) {
 		if q.SessionLimit > 0 {
 			payload["session"] = quotaHash(q.SubjectSecret, "webdecoy.account-quota.v1", strings.ToLower(c.config.PropertyID), q.RuleID, "session", s.AccountID, s.SessionID)
 		}
-		call, cancel := context.WithTimeout(ctx, q.Timeout)
-		defer cancel()
-		err = c.json(call, "POST", "/api/v1/sdk/ai-abuse/quota", payload, &result)
-		if err == nil && (result.Schema != 1 || result.Allowed == nil || result.Remaining == nil || result.Retry == nil || *result.Remaining < 0 || *result.Remaining > q.Limit || result.Reset <= 0 || (*result.Allowed && (result.Reason != "account_quota_allowed" || *result.Retry != 0)) || (!*result.Allowed && (result.Reason != "account_quota_exceeded" || *result.Retry < 1 || *result.Retry > q.WindowSeconds))) {
-			err = errors.New("invalid account quota response")
+		attempts, schema := 1, 1
+		if q.Idempotency {
+			schema, attempts = 2, 2
+			check.OperationID, err = quotaOperationID(q, trusted)
+			payload["schema"], payload["operation_id"] = schema, check.OperationID
 		}
+		if err == nil {
+			for attempt := 0; attempt < attempts; attempt++ {
+				if ctx.Err() != nil {
+					err = ctx.Err()
+					break
+				}
+				call, cancel := context.WithTimeout(ctx, q.Timeout)
+				err = c.json(call, "POST", "/api/v1/sdk/ai-abuse/quota", payload, &result)
+				cancel()
+				if err == nil && (result.Schema != schema || (q.Idempotency && result.OperationID != check.OperationID) || result.Allowed == nil || result.Remaining == nil || result.Retry == nil || *result.Remaining < 0 || *result.Remaining > q.Limit || result.Reset <= 0 || (*result.Allowed && (result.Reason != "account_quota_allowed" || *result.Retry != 0)) || (!*result.Allowed && (result.Reason != "account_quota_exceeded" || *result.Retry < 1 || *result.Retry > q.WindowSeconds))) {
+					err = errors.New("invalid account quota response")
+				}
+				if err == nil {
+					break
+				}
+				var status *httpStatusError
+				terminal := errors.As(err, &status) && status.status < 500
+				if q.Idempotency && !terminal {
+					check.Reason = "account_quota_outcome_unknown"
+				}
+				if terminal || ctx.Err() != nil {
+					break
+				}
+				result = struct {
+					Schema      int    `json:"schema"`
+					OperationID string `json:"operation_id"`
+					Allowed     *bool  `json:"allowed"`
+					Reason      string `json:"reason"`
+					Remaining   *int   `json:"remaining"`
+					Retry       *int   `json:"retry_after_seconds"`
+					Reset       int64  `json:"reset_at"`
+				}{}
+			}
+		}
+
 	}
 	if err != nil {
 		d.report.Degraded = true
 		if q.Mode == Enforce && q.FailureMode == Closed {
 			d.report.Decision = "deny"
-			d.report.Reason = "account_quota_unavailable"
+			d.report.Reason = check.Reason
 			d.report.Action = "denied_unavailable"
 			d.status = 503
 		}

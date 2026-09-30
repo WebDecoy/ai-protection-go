@@ -68,12 +68,13 @@ type Request struct {
 	Headers         http.Header
 }
 type Check struct {
-	ID         string  `json:"id"`
-	Source     string  `json:"source"`
-	Mode       Mode    `json:"mode"`
-	Decision   string  `json:"decision"`
-	Reason     string  `json:"reason"`
-	DurationMS float64 `json:"duration_ms"`
+	OperationID string  `json:"-"` // Local recovery ID, excluded from central report payload.
+	ID          string  `json:"id"`
+	Source      string  `json:"source"`
+	Mode        Mode    `json:"mode"`
+	Decision    string  `json:"decision"`
+	Reason      string  `json:"reason"`
+	DurationMS  float64 `json:"duration_ms"`
 }
 
 // Decision is immutable through the public API. Report accepts only decisions

@@ -303,3 +303,29 @@ second. Rule CPU, caller auth/IP resolution, scheduling, model work and custom
 transports are outside this bound. Do not describe it as a wall-clock SLA.
 Drain HTTP/model work on shutdown and then Flush with a deadline. Existing callback
 streaming/writer interfaces are passed through; flushing cannot recover lost reports.
+
+### Recovering an uncertain quota admission (opt-in)
+
+Set `AccountQuota.Idempotency: true` only after quota schema 2 is deployed.
+The SDK creates one operation ID and retries the quota RPC at most once after
+transport/5xx/malformed-response failures using the same payload. `Timeout` is per
+attempt (up to twice that duration overall). Cancellation stops retries; HTTP 4xx
+stops retries. There is no fallback to schema 1; legacy options keep single-attempt
+schema-1 behavior.
+
+For recovery across requests/processes, persist `NewQuotaOperationID()` in trusted
+server state and supply `OperationID func(T) string`. `Decision.Checks()` exposes
+the local quota check's `OperationID`; central report JSON omits it. Never trust a
+browser-selected ID or reuse an ID for a different logical operation.
+
+IDs expire after ten minutes, with at most 30 seconds forward clock skew. Expired
+IDs cannot consume again after receipt cleanup. Capacity is 10,000 retained
+operations/property, including denials. Same-payload replays return the original
+quota decision; conflicting payloads are rejected. Unresolved results have reason
+`account_quota_outcome_unknown`; existing open/closed settings still apply. Do not
+mint a new ID blindly to recover an expired unknown operation. Replay counts and
+retry hints describe the original quota window.
+
+This deduplicates admission, not execution of application/model callbacks. Deploy
+migration 83, runtime grants and service support before opting in. Public SDK
+publication is a separate step.

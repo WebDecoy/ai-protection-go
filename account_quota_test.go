@@ -3,6 +3,7 @@ package aiprotection
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,6 +134,76 @@ func TestAccountQuotaTimeoutAndInFlightCancellation(t *testing.T) {
 			drain, stop := context.WithTimeout(context.Background(), time.Second)
 			defer stop()
 			c.Flush(drain)
+		})
+	}
+}
+
+func TestAccountQuotaIdempotentRecoveryAndTerminalErrors(t *testing.T) {
+	for _, status := range []int{0, 400, 409, 410, 503, -410} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			id, err := NewQuotaOperationID()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls atomic.Int32
+			var first string
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var p map[string]any
+				json.NewDecoder(r.Body).Decode(&p)
+				b, _ := json.Marshal(p)
+				n := calls.Add(1)
+				if n == 1 {
+					first = string(b)
+				} else if first != string(b) {
+					t.Error("retry payload changed")
+				}
+				if p["schema"] != float64(2) || p["operation_id"] != id {
+					t.Error("wrong v2 request")
+				}
+				if status != 0 {
+					actual := status
+					if status == -410 {
+						actual = 410
+						if n == 1 {
+							actual = 503
+						}
+					}
+					w.WriteHeader(actual)
+					return
+				}
+				if n == 1 {
+					conn, _, _ := w.(http.Hijacker).Hijack()
+					conn.Close()
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]any{"schema": 2, "operation_id": id, "allowed": true, "reason": "account_quota_allowed", "remaining": 0, "retry_after_seconds": 0, "reset_at": 2000000000})
+			}))
+			defer s.Close()
+			c, e := New(Config[string]{BaseURL: s.URL, APIKey: "fixture", PropertyID: "11111111-1111-4111-8111-111111111111", DisableCentralReporting: true, AccountQuota: &AccountQuota[string]{RuleID: "chat", SubjectSecret: strings.Repeat("x", 32), Limit: 1, WindowSeconds: 60, Mode: Enforce, FailureMode: Closed, Idempotency: true, OperationID: func(string) string { return id }, Subject: func(string) QuotaSubject { return QuotaSubject{AccountID: "account"} }}})
+			if e != nil {
+				t.Fatal(e)
+			}
+			d, e := c.Check(context.Background(), Request{Method: "POST", Route: "/chat"}, "")
+			if e != nil {
+				t.Fatal(e)
+			}
+			expected := int32(1)
+			if status == 0 || status == 503 || status == -410 {
+				expected = 2
+			}
+			if calls.Load() != expected || d.Allowed() != (status == 0) {
+				t.Fatal("wrong retry/decision", calls.Load(), d.Reason())
+			}
+			if (status == 503 || status == -410) && d.Reason() != "account_quota_outcome_unknown" {
+				t.Fatal("lost uncertainty", d.Reason())
+			}
+			if d.Checks()[0].OperationID != id {
+				t.Fatal("missing recovery ID")
+			}
+			raw, _ := json.Marshal(d.report)
+			if strings.Contains(string(raw), id) {
+				t.Fatal("operation ID leaked to central reporting")
+			}
 		})
 	}
 }

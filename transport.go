@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+type httpStatusError struct{ status int }
+
+func (*httpStatusError) Error() string { return "WebDecoy HTTP error" }
+
 type account struct {
 	Schema         int    `json:"schema"`
 	PropertyID     string `json:"property_id"`
@@ -86,7 +90,7 @@ func (c *Client[T]) json(ctx context.Context, method, path string, payload any, 
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return errors.New("WebDecoy HTTP error")
+		return &httpStatusError{status: response.StatusCode}
 	}
 	if out == nil {
 		_, err = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
