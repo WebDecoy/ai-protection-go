@@ -320,3 +320,10 @@ mint a new ID blindly to recover an expired unknown operation. Replay counts and
 retry hints describe the original quota window.
 
 This deduplicates admission, not execution of application/model callbacks. The hosted runtime must support quota schema 2 before opting in.
+
+## Action authorization (unreleased development preview)
+
+The source checkout includes `NewActionProtection` for authenticated local action
+dispatch. It is not in the published `v0.1.0-alpha.2` tag. See the
+[record-action example](examples/actions/README.md) for server authentication,
+permission checks, execution ownership, cancellation and evidence limits.
