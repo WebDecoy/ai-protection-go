@@ -3,23 +3,19 @@
 Local application policies plus WebDecoy cloud detection for Go AI endpoints.
 Zero third-party dependencies. Requires Go 1.26.1 or newer.
 
-**Local alpha prototype. No public repository or module version has been published.**
-License selection is pending; no open-source license is granted by this draft.
-The intended module path is `github.com/WebDecoy/ai-protection-go`.
+**Alpha release: `v0.1.0-alpha.1`.** Licensed under [Apache-2.0](LICENSE).
+The hosted WebDecoy detector is a separate service and is not included here.
 
-## Install locally
-
-From a Go application such as lowering-tax/backend:
+## Install
 
 ```sh
-go mod edit -require=github.com/WebDecoy/ai-protection-go@v0.0.0
-go mod edit -replace=github.com/WebDecoy/ai-protection-go=/absolute/path/to/webdecoy-ai-protection-go
-go mod tidy
+go get github.com/WebDecoy/ai-protection-go@v0.1.0-alpha.1
 ```
 
-Run tidy after importing the module; it removes unused requirements. A `go get`
-command will only work after the repository and a version have been published.
-Do not commit a developer-specific replace directive to an application release.
+Use `https://ai-protection.webdecoy.com` as `BaseURL`, your WebDecoy property ID,
+and a server-only API key scoped to that property with Write Detections permission.
+Start in observation mode and review results at
+[AI Protection](https://app.webdecoy.com/ai-protection).
 
 ## Integrate before inference
 
@@ -32,7 +28,7 @@ import protection "github.com/WebDecoy/ai-protection-go"
 type UserContext struct { CanGenerate bool }
 
 client, err := protection.New(protection.Config[UserContext]{
-    BaseURL: ingestOrigin,
+    BaseURL: "https://ai-protection.webdecoy.com",
     APIKey: serverAPIKey,
     PropertyID: propertyID,
     Mode: protection.Observe,
@@ -194,7 +190,7 @@ account/session buckets per property. Capacity/state errors follow the quota's
 failure policy; detector fail-open remains independent.
 
 
-## Distributed concurrency (unpublished, #1373)
+## Distributed concurrency
 
 Optional concurrency policy shares per-account and property/feature capacity
 across app replicas. Defaults are observe/open; detector failure policy is
@@ -220,7 +216,7 @@ The private app repository's `integrations/ai-abuse/CONCURRENCY.md` documents th
 wire contract, failure behavior, deployment order and validation evidence.
 
 
-## Upstream model budgets (unpublished, #1374)
+## Upstream model budgets
 
 Opt-in token and integer micro-USD budgets reserve a conservative maximum before
 each provider attempt and reconcile only confirmed usage. Configure account,
@@ -289,8 +285,8 @@ has zero third-party dependencies. `scripts/check-module.py` builds an explicit
 allowlist zip and installs it into a fresh consumer and module cache using a local
 file proxy; it does not publish a module or contact a public checksum service.
 The ephemeral proxy test disables sumdb only for that locally generated fixture;
-do not copy those settings to customer builds. License/repository release approval
-is still pending. Keep the private pilot snapshot until a reviewed module exists.
+do not copy those settings to customer builds. The public alpha is licensed under Apache-2.0. Use the tagged module version
+without a local replace directive in customer builds.
 
 Config/detector JSON is capped at 64 KiB. Detector and reporting timeouts default
 to one second and are limited to ten seconds; report capacity defaults to 100 and

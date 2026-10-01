@@ -1,3 +1,5 @@
+> Historical validation record. Public alpha publication was approved on October 1, 2026 under Apache-2.0. See README for current installation.
+
 # Go adapter validation — 2026-09-27
 
 - Go 1.26.1 (matching lowering.tax's go.mod): `go test -race ./... -count=1`.
