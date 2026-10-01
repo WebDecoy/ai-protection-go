@@ -3,13 +3,13 @@
 Local application policies plus WebDecoy cloud detection for Go AI endpoints.
 Zero third-party dependencies. Requires Go 1.26.1 or newer.
 
-**Alpha release: `v0.1.0-alpha.1`.** Licensed under [Apache-2.0](LICENSE).
+**Alpha release: `v0.1.0-alpha.2`.** Licensed under [Apache-2.0](LICENSE).
 The hosted WebDecoy detector is a separate service and is not included here.
 
 ## Install
 
 ```sh
-go get github.com/WebDecoy/ai-protection-go@v0.1.0-alpha.1
+go get github.com/WebDecoy/ai-protection-go@v0.1.0-alpha.2
 ```
 
 Use `https://ai-protection.webdecoy.com` as `BaseURL`, your WebDecoy property ID,
@@ -139,8 +139,7 @@ go vet ./...
 The JS SDK's experimental HMAC subject/shadow-rate comparison is intentionally
 not ported: it is not needed for admission or the reporting contract. This module
 also takes explicit request metadata instead of guessing proxy trust or route
-normalization. Backend account/config, detection and report endpoints must be
-deployed before a real staging pilot. No lowering.tax code is changed by this repo.
+normalization. Use the hosted AI Protection endpoint for account/config, detection and reporting.
 
 ## Shared account quotas (opt-in)
 
@@ -162,7 +161,7 @@ account/session identity or policy from browser claims. Optional `SessionLimit`
 and `SessionID` add an account-bound session cap; rotating sessions does not reset
 the account counter. IPs/shared NAT do not determine quota identity.
 
-Requires quota backend migration 78 and `/api/v1/sdk/ai-abuse/quota`. The quota
+Uses the hosted `/api/v1/sdk/ai-abuse/quota` endpoint. The quota
 mode defaults to `Observe`, failure policy to `Open`, and timeout to one second;
 these are independent of cloud detection and dashboard mode. Explicit
 `FailureMode: Closed` returns 503 for unavailable/invalid quota state. Enforced
@@ -212,8 +211,6 @@ proof a remote provider stopped. Upstream work must honor cancellation and have
 a real runtime bound. Fail-open outages cannot guarantee a concurrency cap.
 Released replay tombstones remain 24 hours: the pilot cap is 10,000 granted
 acquisitions/day/property and 32 policies/property. This is not a throughput SLA.
-The private app repository's `integrations/ai-abuse/CONCURRENCY.md` documents the
-wire contract, failure behavior, deployment order and validation evidence.
 
 
 ## Upstream model budgets
@@ -244,8 +241,7 @@ is based on admission time, not the provider's invoice period.
 There is an Ollama final-usage normalizer for native generate/chat metadata;
 other provider clients need a reviewed application adapter. The SDK never parses
 or stores prompts/outputs to meter usage. This does not change WebDecoy plans or
-create a subscription meter. The private app's `integrations/ai-abuse/BUDGETS.md`
-contains examples, supported workloads, privacy, capacity and release gates.
+create a subscription meter.
 
 ## Optional browser evidence
 
@@ -323,6 +319,4 @@ quota decision; conflicting payloads are rejected. Unresolved results have reaso
 mint a new ID blindly to recover an expired unknown operation. Replay counts and
 retry hints describe the original quota window.
 
-This deduplicates admission, not execution of application/model callbacks. Deploy
-migration 83, runtime grants and service support before opting in. Public SDK
-publication is a separate step.
+This deduplicates admission, not execution of application/model callbacks. The hosted runtime must support quota schema 2 before opting in.
