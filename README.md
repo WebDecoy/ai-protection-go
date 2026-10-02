@@ -3,13 +3,13 @@
 Local application policies plus WebDecoy cloud detection for Go AI endpoints.
 Zero third-party dependencies. Requires Go 1.26.1 or newer.
 
-**Alpha release: `v0.1.0-alpha.2`.** Licensed under [Apache-2.0](LICENSE).
+**Alpha release: `v0.1.0-alpha.3`.** Licensed under [Apache-2.0](LICENSE).
 The hosted WebDecoy detector is a separate service and is not included here.
 
 ## Install
 
 ```sh
-go get github.com/WebDecoy/ai-protection-go@v0.1.0-alpha.2
+go get github.com/WebDecoy/ai-protection-go@v0.1.0-alpha.3
 ```
 
 Use `https://ai-protection.webdecoy.com` as `BaseURL`, your WebDecoy property ID,
@@ -321,12 +321,12 @@ retry hints describe the original quota window.
 
 This deduplicates admission, not execution of application/model callbacks. The hosted runtime must support quota schema 2 before opting in.
 
-## Action authorization (unreleased development preview)
+## Action authorization (Alpha)
 
-The source checkout includes `NewActionProtection` for authenticated local action
-dispatch. It is not in the published `v0.1.0-alpha.2` tag. See the
+Version `v0.1.0-alpha.3` includes `NewActionProtection` for authenticated action
+dispatch. See the
 [record-action example](examples/actions/README.md) for server authentication,
 permission checks, execution ownership, cancellation and evidence limits.
 
-The source preview also supports optional shared caller/tenant quotas, concurrency
-leases and hosted action events. See the [shared action controls](examples/actions/README.md#shared-limits-and-hosted-evidence-source-preview).
+The action API also supports optional shared caller/tenant quotas, concurrency
+leases and hosted action events. See the [shared action controls](examples/actions/README.md#shared-limits-and-hosted-evidence).
