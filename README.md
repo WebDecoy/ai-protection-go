@@ -327,3 +327,6 @@ The source checkout includes `NewActionProtection` for authenticated local actio
 dispatch. It is not in the published `v0.1.0-alpha.2` tag. See the
 [record-action example](examples/actions/README.md) for server authentication,
 permission checks, execution ownership, cancellation and evidence limits.
+
+The source preview also supports optional shared caller/tenant quotas, concurrency
+leases and hosted action events. See the [shared action controls](examples/actions/README.md#shared-limits-and-hosted-evidence-source-preview).
