@@ -1,4 +1,4 @@
-# Local action boundary — unreleased preview
+# Action protection — Alpha
 
 Run `go run ./examples/actions`. One authorized read executes; cross-tenant read,
 export and forged-session attempts deny before dispatch. No model/network calls.
@@ -28,7 +28,7 @@ up to 100 observer goroutines are allowed, then events are dropped. Delivery ord
 is not guaranteed; correlate by action ID and outcome. This is best-effort local
 telemetry. Optional hosted reporting is described below.
 
-## Shared limits and hosted evidence (source preview)
+## Shared limits and hosted evidence
 
 Set `ActionOptions.SharedRuntime` to connect the action boundary to AI Protection:
 
@@ -85,4 +85,4 @@ arguments, outputs, tokens and lease IDs are excluded. Events may be lost or arr
 out of order; they do not prove a complete execution history. Drain handlers, then
 call `guard.Flush(ctx)` at shutdown. A reporting failure never reruns tool work.
 
-This source preview is not included in the published `v0.1.0-alpha.2` tag.
+These APIs are included in `v0.1.0-alpha.3`.

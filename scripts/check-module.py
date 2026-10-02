@@ -6,7 +6,7 @@ import hashlib,json,os,pathlib,subprocess,tempfile,zipfile
 root=pathlib.Path(__file__).resolve().parents[1]
 go_bin=str(pathlib.Path(subprocess.check_output(['go','env','GOROOT'],text=True).strip())/'bin/go')
 module='github.com/WebDecoy/ai-protection-go'
-version='v0.1.0-alpha.2'
+version='v0.1.0-alpha.3'
 expected={'action_runtime.go','actions.go','go.mod','README.md','LICENSE','NOTICE','budget.go','browser_evidence.go','concurrency.go','protection.go','account_quota.go','reporting.go','transport.go','usage.go'}
 actual={p.name for p in root.glob('*.go') if not p.name.endswith('_test.go')}|{'go.mod','README.md','LICENSE','NOTICE'}
 if actual!=expected:raise SystemExit('Review the module artifact allowlist: '+str(actual^expected))
