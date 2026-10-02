@@ -49,6 +49,8 @@ func prepareConcurrency[T any](q *Concurrency[T]) (*Concurrency[T], error) {
 	return q, nil
 }
 
+var errConcurrencyRelease = errors.New("concurrency release unavailable; reservation retained")
+
 type leaseResponse struct {
 	Schema     int    `json:"schema"`
 	Allowed    *bool  `json:"allowed"`
@@ -64,6 +66,14 @@ type leaseResponse struct {
 // panics and cancellation leave a conservative reservation until MaxSeconds.
 // This does not call Check: use after normal admission, before inference.
 func (c *Client[T]) RunConcurrent(ctx context.Context, trusted T, work func(context.Context) error) (decision ConcurrencyDecision, err error) {
+	if work == nil {
+		return decision, errors.New("work required")
+	}
+	return c.runConcurrent(ctx, trusted, func(ctx context.Context, _ Check) error { return work(ctx) })
+}
+
+// Internal callback exposes the admission check before execution for action evidence.
+func (c *Client[T]) runConcurrent(ctx context.Context, trusted T, work func(context.Context, Check) error) (decision ConcurrencyDecision, err error) {
 	q := c.config.Concurrency
 	if q == nil || work == nil {
 		return decision, errors.New("concurrency configuration and work required")
@@ -103,7 +113,7 @@ func (c *Client[T]) RunConcurrent(ctx context.Context, trusted T, work func(cont
 			decision.Status = 503
 			return decision, nil
 		}
-		return decision, work(ctx)
+		return decision, work(ctx, decision.Check)
 	}
 	decision.Check.Decision = "allow"
 	decision.Check.Reason = grant.Reason
@@ -178,7 +188,7 @@ func (c *Client[T]) RunConcurrent(ctx context.Context, trusted T, work func(cont
 	if e := workCtx.Err(); e != nil {
 		return decision, e
 	}
-	err = work(workCtx)
+	err = work(workCtx, decision.Check)
 	closeWorkErr := workCtx.Err()
 	if err == nil && closeWorkErr == nil {
 		// Stop renewals before release; duplicate releases are idempotent at the server.
@@ -192,7 +202,7 @@ func (c *Client[T]) RunConcurrent(ctx context.Context, trusted T, work func(cont
 		releaseCtx, stop := context.WithTimeout(context.Background(), q.Timeout)
 		defer stop()
 		if r, e := rpc(releaseCtx, release); e != nil || !*r.Allowed || r.Reason != "concurrency_released" {
-			return decision, errors.New("concurrency release unavailable; reservation retained")
+			return decision, errConcurrencyRelease
 		}
 	} else if err == nil {
 		err = closeWorkErr

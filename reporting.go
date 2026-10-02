@@ -8,17 +8,25 @@ import (
 	"time"
 )
 
+type ToolActionReport struct {
+	ActionID      string `json:"action_id"`
+	Name          string `json:"name"`
+	PolicyVersion string `json:"policy_version"`
+	Outcome       string `json:"outcome"`
+}
+
 type Report struct {
-	Schema           int       `json:"schema"`
-	RequestID        string    `json:"request_id"`
-	Timestamp        time.Time `json:"timestamp"`
-	Decision         string    `json:"decision"`
-	Reason           string    `json:"reason"`
-	Degraded         bool      `json:"degraded"`
-	Checks           []Check   `json:"checks"`
-	HandlerAttempted bool      `json:"handler_attempted"`
-	HandlerStatus    *int      `json:"handler_status,omitempty"`
-	Action           string    `json:"action"`
+	ToolAction       *ToolActionReport `json:"tool_action,omitempty"`
+	Schema           int               `json:"schema"`
+	RequestID        string            `json:"request_id"`
+	Timestamp        time.Time         `json:"timestamp"`
+	Decision         string            `json:"decision"`
+	Reason           string            `json:"reason"`
+	Degraded         bool              `json:"degraded"`
+	Checks           []Check           `json:"checks"`
+	HandlerAttempted bool              `json:"handler_attempted"`
+	HandlerStatus    *int              `json:"handler_status,omitempty"`
+	Action           string            `json:"action"`
 }
 type Outcome struct {
 	HandlerAttempted bool
@@ -28,6 +36,10 @@ type Outcome struct {
 }
 
 func cloneReport(r Report) Report {
+	if r.ToolAction != nil {
+		v := *r.ToolAction
+		r.ToolAction = &v
+	}
 	r.Checks = append([]Check(nil), r.Checks...)
 	if r.HandlerStatus != nil {
 		s := *r.HandlerStatus

@@ -3,8 +3,6 @@ package aiprotection
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -28,6 +26,7 @@ type ActionContext struct {
 	Arguments json.RawMessage
 }
 type ActionDefinition struct {
+	Limits         *ActionLimits
 	RequiredScopes []string
 	Validate       func(context.Context, json.RawMessage) (bool, error)
 	Authorize      func(context.Context, ActionContext) (bool, error)
@@ -36,25 +35,30 @@ type ActionDefinition struct {
 	Execute func(context.Context, ActionContext) (any, error)
 }
 type ActionEvent struct {
-	Schema        int    `json:"schema"`
-	ActionID      string `json:"actionId"`
-	Action        string `json:"action"`
-	PolicyVersion string `json:"policyVersion"`
-	Evaluation    string `json:"evaluation"`
-	Decision      string `json:"decision"`
-	Reason        string `json:"reason"`
-	Attempted     bool   `json:"attempted"`
-	Outcome       string `json:"outcome"`
+	EventID       string    `json:"eventId"`
+	Timestamp     time.Time `json:"timestamp"`
+	Checks        []Check   `json:"checks"`
+	Schema        int       `json:"schema"`
+	ActionID      string    `json:"actionId"`
+	Action        string    `json:"action"`
+	PolicyVersion string    `json:"policyVersion"`
+	Evaluation    string    `json:"evaluation"`
+	Decision      string    `json:"decision"`
+	Reason        string    `json:"reason"`
+	Attempted     bool      `json:"attempted"`
+	Outcome       string    `json:"outcome"`
 }
 type ActionDenied struct {
-	Reason   string
-	Status   int
-	ActionID string
+	RetryAfterSeconds int
+	Reason            string
+	Status            int
+	ActionID          string
 }
 
 func (e *ActionDenied) Error() string { return e.Reason }
 
 type ActionOptions[T any] struct {
+	SharedRuntime    *ActionRuntime
 	PolicyVersion    string
 	Authenticate     func(context.Context, T) (TrustedCaller, error)
 	Actions          map[string]ActionDefinition
@@ -62,6 +66,7 @@ type ActionOptions[T any] struct {
 	OnEvent          func(ActionEvent)
 }
 type ActionProtection[T any] struct {
+	runtime    *preparedActionRuntime
 	options    ActionOptions[T]
 	admissions chan struct{}
 	observers  chan struct{}
@@ -96,7 +101,11 @@ func NewActionProtection[T any](o ActionOptions[T]) (*ActionProtection[T], error
 		definitions[name] = d
 	}
 	o.Actions = definitions
-	return &ActionProtection[T]{options: o, admissions: make(chan struct{}, 32), observers: make(chan struct{}, 100)}, nil
+	runtime, err := prepareActionRuntime(o.SharedRuntime, definitions)
+	if err != nil {
+		return nil, err
+	}
+	return &ActionProtection[T]{runtime: runtime, options: o, admissions: make(chan struct{}, 32), observers: make(chan struct{}, 100)}, nil
 }
 func copyActionContext(c ActionContext) ActionContext {
 	c.Caller.Scopes = slices.Clone(c.Caller.Scopes)
@@ -168,6 +177,12 @@ func actionJSON(raw []byte) bool {
 	return e == io.EOF
 }
 func (p *ActionProtection[T]) emit(e ActionEvent) {
+	e.EventID, _ = requestID()
+	e.Timestamp = time.Now().UTC()
+	e.Checks = slices.Clone(e.Checks)
+	if p.runtime != nil {
+		p.runtime.report(e)
+	}
 	if p.options.OnEvent == nil {
 		return
 	}
@@ -233,23 +248,24 @@ func (p *ActionProtection[T]) admit(ctx context.Context, d ActionDefinition, arg
 	return actionAdmission{context: ac}
 }
 func (p *ActionProtection[T]) Run(ctx context.Context, name string, args json.RawMessage, auth T) (value any, err error) {
-	b := make([]byte, 16)
-	if _, err = rand.Read(b); err != nil {
+	id, err := requestID()
+	if err != nil {
 		return nil, err
 	}
-	id := hex.EncodeToString(b)
 	d, known := p.options.Actions[name]
 	eventName := name
 	if !known {
 		eventName = "unregistered"
 	}
 	attempted := false
+	checks := []Check{}
+	retry := 0
 	emit := func(decision, reason, outcome string) {
-		p.emit(ActionEvent{1, id, eventName, p.options.PolicyVersion, "local", decision, reason, attempted, outcome})
+		p.emit(ActionEvent{Schema: 1, ActionID: id, Action: eventName, PolicyVersion: p.options.PolicyVersion, Evaluation: "local", Decision: decision, Reason: reason, Attempted: attempted, Outcome: outcome, Checks: checks})
 	}
 	deny := func(reason string, status int) (any, error) {
 		emit("deny", reason, "not_attempted")
-		return nil, &ActionDenied{reason, status, id}
+		return nil, &ActionDenied{Reason: reason, Status: status, ActionID: id, RetryAfterSeconds: retry}
 	}
 	if err = ctx.Err(); err != nil {
 		emit("deny", "admission_cancelled", "not_attempted")
@@ -295,23 +311,93 @@ func (p *ActionProtection[T]) Run(ctx context.Context, name string, args json.Ra
 		return deny("authentication_expired", 401)
 	}
 	cancel() // Execute owns caller cancellation, not the admission deadline.
-	attempted = true
-	emit("allow", "authorized", "attempted")
+	var controls actionControls
+	if p.runtime != nil {
+		controls = p.runtime.controls[name]
+	}
+	for i, client := range controls.quotas {
+		decision := &Decision{report: Report{Decision: "allow"}}
+		client.checkQuota(ctx, admission.context.Caller, decision)
+		for _, check := range decision.Checks() {
+			check.ID = controls.quotaIDs[i]
+			checks = append(checks, check)
+		}
+		if ctx.Err() != nil {
+			emit("deny", "admission_cancelled", "not_attempted")
+			return nil, ctx.Err()
+		}
+		if !decision.Allowed() {
+			retry = decision.RetryAfterSeconds()
+			return deny(decision.Reason(), decision.Status())
+		}
+	}
+	work := func(workCtx context.Context) error {
+		if e := workCtx.Err(); e != nil {
+			return e
+		}
+		if !admission.context.Caller.ExpiresAt.After(time.Now()) {
+			return &ActionDenied{Reason: "authentication_expired", Status: 401, ActionID: id}
+		}
+		attempted = true
+		emit("allow", "authorized", "attempted")
+		var workErr error
+		value, workErr = d.Execute(workCtx, copyActionContext(admission.context))
+		if workCtx.Err() != nil {
+			return workCtx.Err()
+		}
+		return workErr
+	}
 	defer func() {
 		if v := recover(); v != nil {
 			emit("allow", "execution_failed", "unknown")
 			panic(v)
 		}
 	}()
-	value, err = d.Execute(ctx, copyActionContext(admission.context))
-	if ctx.Err() != nil {
-		emit("allow", "execution_cancelled", "unknown")
-		return nil, ctx.Err()
+	if controls.concurrent != nil {
+		decision, workErr := controls.concurrent.runConcurrent(ctx, admission.context.Caller, func(workCtx context.Context, check Check) error {
+			checks = append(checks, check)
+			return work(workCtx)
+		})
+		err = workErr
+		if !attempted && !decision.Allowed && err == nil {
+			checks = append(checks, decision.Check)
+			retry = decision.RetryAfterSeconds
+			return deny(decision.Check.Reason, decision.Status)
+		}
+		if errors.Is(err, errConcurrencyRelease) {
+			checks = append(checks, Check{ID: "concurrency_release", Source: "shared", Mode: decision.Check.Mode, Decision: "unavailable", Reason: "concurrency_release_unavailable"})
+			err = nil // Completed work is never retried because release/reporting failed.
+		}
+	} else {
+		err = work(ctx)
+	}
+	if !attempted {
+		var denied *ActionDenied
+		if errors.As(err, &denied) {
+			return deny(denied.Reason, denied.Status)
+		}
+		if ctx.Err() != nil {
+			emit("deny", "admission_cancelled", "not_attempted")
+			return nil, ctx.Err()
+		}
+		return deny("admission_unavailable", 503)
 	}
 	if err != nil {
-		emit("allow", "execution_failed", "unknown")
+		reason := "execution_failed"
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			reason = "execution_cancelled"
+		}
+		emit("allow", reason, "unknown")
 		return value, err
 	}
 	emit("allow", "authorized", "completed")
 	return value, nil
+}
+
+// Flush waits for bounded hosted event delivery after draining action handlers.
+func (p *ActionProtection[T]) Flush(ctx context.Context) error {
+	if p.runtime == nil {
+		return nil
+	}
+	return p.runtime.reporter.Flush(ctx)
 }
