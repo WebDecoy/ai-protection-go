@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // TrustedCaller is supplied by verified application authentication, never tool arguments.
@@ -75,7 +76,7 @@ type ActionProtection[T any] struct {
 var actionName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$`)
 
 func actionString(s string) bool {
-	return len(s) > 0 && len(s) <= 512 && !strings.ContainsFunc(s, func(r rune) bool { return r < 32 || r == 127 })
+	return utf8.ValidString(s) && len(s) > 0 && len(s) <= 512 && !strings.ContainsFunc(s, func(r rune) bool { return r < 32 || r == 127 })
 }
 func NewActionProtection[T any](o ActionOptions[T]) (*ActionProtection[T], error) {
 	if o.Authenticate == nil || !actionName.MatchString(o.PolicyVersion) || len(o.Actions) == 0 || len(o.Actions) > 128 {
