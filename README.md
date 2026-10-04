@@ -330,3 +330,22 @@ permission checks, execution ownership, cancellation and evidence limits.
 
 The action API also supports optional shared caller/tenant quotas, concurrency
 leases and hosted action events. See the [shared action controls](examples/actions/README.md#shared-limits-and-hosted-evidence).
+
+
+### Caller contract conformance
+
+Identity strings and scope names must be valid UTF-8, nonempty, at most 512 bytes,
+and contain no C0/DEL control characters. Optional empty `ClientID` represents an
+unavailable OAuth client. Node represents that absence by omitting `clientId`.
+`ExpiresAt` is a future `time.Time`; Node uses Unix milliseconds. Use millisecond
+precision and at most 512 UTF-8 bytes for portable context. Node's historical
+512 UTF-16-code-unit limit can accept longer non-ASCII strings; this is not a
+promise that those longer values work in Go.
+
+`testdata/caller-contract-v1.json` is mirrored by the Node SDK conformance suite.
+It verifies authorization outcomes and zero callbacks for denied inputs, including
+forged argument identity, tenant mismatch, scopes, expiry and boundary sizes.
+Malformed language-native Unicode is additionally tested in each SDK.
+See [the shared identity guidance](https://github.com/WebDecoy/ai-protection/blob/main/CALLER_IDENTITY.md)
+for delegation limits and reporting differences. This does not add Go MCP, hosted
+caller-pseudonym reporting, caller pauses or verified agent identity.
