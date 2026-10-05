@@ -231,6 +231,31 @@ func TestActionRuntimeFailureAndLeaseLifecycle(t *testing.T) {
 			if len(reports) != expected {
 				t.Fatal(len(reports))
 			}
+			wantOutcomes := map[string]bool{"attempted": true, "completed": true}
+			if denied {
+				wantOutcomes = map[string]bool{"not_attempted": true}
+			}
+			if kind == "cancel" || kind == "panic" {
+				wantOutcomes = map[string]bool{"attempted": true, "unknown": true}
+			}
+			actionID := ""
+			for _, report := range reports {
+				if report.ToolAction == nil {
+					t.Fatal("missing action evidence")
+				}
+				a := report.ToolAction
+				if a.PolicyVersion != "v1" || !wantOutcomes[a.Outcome] {
+					t.Fatal(a)
+				}
+				if actionID != "" && actionID != a.ActionID {
+					t.Fatal("uncorrelated phases")
+				}
+				actionID = a.ActionID
+				delete(wantOutcomes, a.Outcome)
+			}
+			if len(wantOutcomes) != 0 {
+				t.Fatal("missing outcomes", wantOutcomes)
+			}
 			if kind == "release_failed" {
 				found := false
 				for _, r := range reports {

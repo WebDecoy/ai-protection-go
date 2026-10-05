@@ -86,3 +86,19 @@ out of order; they do not prove a complete execution history. Drain handlers, th
 call `guard.Flush(ctx)` at shutdown. A reporting failure never reruns tool work.
 
 These APIs are included in `v0.1.0-alpha.3`.
+
+## Callback completion and policy changes
+
+Consume provider streams inside `Execute` and return only after consumption and
+cleanup finish. A returned reader or detached goroutine is not tracked: returning
+from the callback means completion even if that separate work is still running.
+The callback must cooperate with its context to stop work on cancellation.
+
+Construct a new guard with a new `PolicyVersion` when replacing local rules, and
+safely route new requests to it (for example through an application-owned atomic
+pointer). In-flight requests retain their original guard and event version.
+Replacement does not revoke already admitted work. Drain and flush old guards.
+Policy callbacks reading mutable application state do not automatically update
+the configured version; use consistent application-owned snapshots when version
+IDs must identify exact rules. Managed policy delivery and rollback are separate
+features, not supplied by this local registry.
