@@ -3,13 +3,13 @@
 Local application policies plus WebDecoy cloud detection for Go AI endpoints.
 Zero third-party dependencies. Requires Go 1.26.1 or newer.
 
-**Alpha release: `v0.1.0-alpha.3`.** Licensed under [Apache-2.0](LICENSE).
+**Beta release: `v0.1.0-beta.0`.** Licensed under [Apache-2.0](LICENSE).
 The hosted WebDecoy detector is a separate service and is not included here.
 
 ## Install
 
 ```sh
-go get github.com/WebDecoy/ai-protection-go@v0.1.0-alpha.3
+go get github.com/WebDecoy/ai-protection-go@v0.1.0-beta.0
 ```
 
 Use `https://ai-protection.webdecoy.com` as `BaseURL`, your WebDecoy property ID,
@@ -281,7 +281,7 @@ has zero third-party dependencies. `scripts/check-module.py` builds an explicit
 allowlist zip and installs it into a fresh consumer and module cache using a local
 file proxy; it does not publish a module or contact a public checksum service.
 The ephemeral proxy test disables sumdb only for that locally generated fixture;
-do not copy those settings to customer builds. The public alpha is licensed under Apache-2.0. Use the tagged module version
+do not copy those settings to customer builds. The public beta is licensed under Apache-2.0. Use the tagged module version
 without a local replace directive in customer builds.
 
 Config/detector JSON is capped at 64 KiB. Detector and reporting timeouts default
@@ -321,9 +321,9 @@ retry hints describe the original quota window.
 
 This deduplicates admission, not execution of application/model callbacks. The hosted runtime must support quota schema 2 before opting in.
 
-## Action authorization (Alpha)
+## Action authorization (Beta)
 
-Version `v0.1.0-alpha.3` includes `NewActionProtection` for authenticated action
+Since `v0.1.0-alpha.3`, the module includes `NewActionProtection` for authenticated action
 dispatch. See the
 [record-action example](examples/actions/README.md) for server authentication,
 permission checks, execution ownership, cancellation and evidence limits.

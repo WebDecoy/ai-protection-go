@@ -1,4 +1,4 @@
-# Action protection — Alpha
+# Action protection — Beta
 
 Run `go run ./examples/actions`. One authorized read executes; cross-tenant read,
 export and forged-session attempts deny before dispatch. No model/network calls.
@@ -85,7 +85,7 @@ arguments, outputs, tokens and lease IDs are excluded. Events may be lost or arr
 out of order; they do not prove a complete execution history. Drain handlers, then
 call `guard.Flush(ctx)` at shutdown. A reporting failure never reruns tool work.
 
-These APIs are included in `v0.1.0-alpha.3`.
+These APIs were introduced in `v0.1.0-alpha.3` and are included in `v0.1.0-beta.0`.
 
 ## Callback completion and policy changes
 
